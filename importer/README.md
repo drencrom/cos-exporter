@@ -41,6 +41,21 @@ Value and timestamp are supplied via `--value` / `--timestamp` CLI arguments.
 
 Timestamps and values are read directly from the file.
 
+### 3. Metric-name map format
+
+```json
+{
+  "cpu_usage": [
+    {
+      "metric": {"host": "server1"},
+      "values": [[1700000000, "23.5"], [1700000060, "24.1"]]
+    }
+  ]
+}
+```
+
+Top-level keys are treated as metric names. If `metric.__name__` is missing, it is set from the key.
+
 ## Usage
 
 ```bash

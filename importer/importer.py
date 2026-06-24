@@ -18,6 +18,16 @@ Supported JSON formats:
      ...
    ]
 
+3. Metric-name map format:
+   {
+     "metric_name_a": [
+       {"metric": {"label": "value"}, "values": [[<timestamp>, "<value>"], ...]}
+     ],
+     "metric_name_b": [
+       {"metric": {"label": "value"}, "value": [<timestamp>, "<value>"]}
+     ]
+   }
+
 Usage examples:
   # Label-set format with a fixed value of 1 at current time:
   python importer.py --url http://localhost:9090/api/v1/write metrics.json
@@ -47,7 +57,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from prometheus_remote_writer import RemoteWriter
 
@@ -99,19 +109,11 @@ def parse_prometheus_result_format(entries: List[Dict]) -> List[Dict]:
     for entry in entries:
         metric_labels = {k: str(v) for k, v in entry.get("metric", {}).items()}
 
-        if "values" in entry:
-            # Range vector: [[timestamp, "value"], ...]
-            raw_pairs = entry["values"]
-            timestamps = [float(pair[0]) for pair in raw_pairs]
-            values = [float(pair[1]) for pair in raw_pairs]
-        elif "value" in entry:
-            # Instant vector: [timestamp, "value"]
-            pair = entry["value"]
-            timestamps = [float(pair[0])]
-            values = [float(pair[1])]
-        else:
-            log.warning("Skipping entry with no 'value' or 'values': %s", entry)
+        parsed_samples = _extract_samples(entry)
+        if parsed_samples is None:
+            log.warning("Skipping entry with no valid 'value' or 'values': %s", entry)
             continue
+        timestamps, values = parsed_samples
 
         metrics.append({
             "metric": metric_labels,
@@ -121,19 +123,84 @@ def parse_prometheus_result_format(entries: List[Dict]) -> List[Dict]:
     return metrics
 
 
-def load_json_file(path: Path) -> List[Any]:
-    """Load a JSON file and always return a list."""
+def _extract_samples(entry: Dict[str, Any]) -> Optional[Tuple[List[float], List[float]]]:
+    """Extract (timestamps, values) from either Prometheus 'value' or 'values' fields."""
+    if "values" in entry:
+        # Range vector: [[timestamp, "value"], ...]
+        raw_pairs = entry["values"]
+        return (
+            [float(pair[0]) for pair in raw_pairs],
+            [float(pair[1]) for pair in raw_pairs],
+        )
+    if "value" in entry:
+        # Instant vector: [timestamp, "value"]
+        pair = entry["value"]
+        return ([float(pair[0])], [float(pair[1])])
+    return None
+
+
+def parse_metric_name_map_format(payload: Dict[str, Any]) -> List[Dict]:
+    """
+    Convert dict payloads keyed by metric name to MetricItem format.
+
+    Example:
+      {
+        "cpu_usage": [{"metric": {"host": "a"}, "values": [[1700000000, "23.5"]]}]
+      }
+    """
+    metrics: List[Dict] = []
+    for metric_name, raw_entries in payload.items():
+        entries = raw_entries if isinstance(raw_entries, list) else [raw_entries]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                log.warning("Skipping non-dict metric entry for %s: %r", metric_name, entry)
+                continue
+
+            metric_labels = {k: str(v) for k, v in entry.get("metric", {}).items()}
+            metric_labels.setdefault("__name__", str(metric_name))
+
+            parsed_samples = _extract_samples(entry)
+            if parsed_samples is None:
+                log.warning(
+                    "Skipping metric entry for %s with no valid 'value' or 'values': %s",
+                    metric_name,
+                    entry,
+                )
+                continue
+            timestamps, values = parsed_samples
+
+            metrics.append({
+                "metric": metric_labels,
+                "values": values,
+                "timestamps": timestamps,
+            })
+    return metrics
+
+
+def load_json_file(path: Path) -> Any:
+    """Load and return raw JSON payload from file."""
     with open(path, "r") as f:
-        data = json.load(f)
-    return data if isinstance(data, list) else [data]
+        return json.load(f)
 
 
 def parse_entries(
-    entries: List[Any],
+    payload: Any,
     default_value: float,
     default_timestamp_ms: int,
 ) -> List[Dict]:
     """Auto-detect format and convert entries to MetricItem list."""
+    if isinstance(payload, dict):
+        # Single-entry variants encoded as objects.
+        if _is_label_set_format(payload) or "metric" in payload or "value" in payload or "values" in payload:
+            entries = [payload]
+        else:
+            return parse_metric_name_map_format(payload)
+    elif isinstance(payload, list):
+        entries = payload
+    else:
+        log.warning("Unsupported JSON payload type: %s", type(payload).__name__)
+        return []
+
     if not entries:
         return []
 
