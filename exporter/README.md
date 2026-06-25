@@ -34,10 +34,11 @@ python3 extract_metrics.py [OPTIONS]
 | `--url URL` | `http://localhost:9090` | Prometheus base URL |
 | `--match REGEX` | `.+` | Metric name regex filter |
 | `--verbose`, `-v` | off | Also print label sets per metric |
-| `--json` | off | Output raw series data as JSON |
 | `--range-start TIME` | none | Start time for querying each metric (`query_range`) |
 | `--range-end TIME` | none | End time for querying each metric (`query_range`) |
 | `--range-step DURATION` | `15s` | Step for range queries |
+| `--openmetrics` | off | Output in OpenMetrics text format (also applies to range queries) |
+| `--output-file PATH` | none | Write output to a file instead of stdout |
 
 ## Examples
 
@@ -54,14 +55,18 @@ python3 extract_metrics.py --verbose
 # Filter metrics by name prefix
 python3 extract_metrics.py --match 'node_.+'
 
-# Output raw JSON for further processing
-python3 extract_metrics.py --json | jq '.[0]'
-
 # Fetch time-series data for every discovered metric
 python3 extract_metrics.py \
   --range-start '2015-07-01T20:10:30.781Z' \
   --range-end '2015-07-01T20:11:00.781Z' \
   --range-step '15s'
+
+# Fetch time-series data and emit OpenMetrics text format
+python3 extract_metrics.py \
+  --range-start '2015-07-01T20:10:30.781Z' \
+  --range-end '2015-07-01T20:11:00.781Z' \
+  --range-step '15s' \
+  --openmetrics
 ```
 
 ### Sample Output
